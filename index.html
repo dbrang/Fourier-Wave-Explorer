@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Fourier Wave Creator (Clipped & Spaced Axes with Padding)</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.min.js"></script>
+  <style>
+    body {
+      font-family: 'Arial', sans-serif;
+      background: #f4f4f4;
+      margin: 0;
+      padding: 20px;
+    }
+    header {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    .container {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .canvas-container {
+      background: #fff;
+      padding: 10px;
+      border-radius: 4px;
+      box-shadow: 0px 0px 10px rgba(0,0,0,0.1);
+      margin: 10px;
+    }
+    #controls {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    button {
+      background: #3498db;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      padding: 8px 12px;
+      cursor: pointer;
+      font-size: 14px;
+      margin: 5px;
+    }
+    button:hover {
+      background: #2980b9;
+    }
+    input[type=range] {
+      vertical-align: middle;
+    }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Fourier Wave Creator</h1>
+  <p>Draw or load template waves (mean centered) to see their Fourier reconstruction and PSD.</p>
+</header>
+
+<div id="controls">
+  <label for="componentSlider">Sine Components:</label>
+  <input type="range" id="componentSlider" min="1" max="30" value="15">
+  <span id="componentCount">15</span>
+  <button id="resetBtn">Reset Drawing</button>
+  <br>
+  <!-- Template buttons -->
+  <button id="btnSquare">Square Wave (5Hz)</button>
+  <button id="btnWhiteNoise">White Noise</button>
+  <button id="btnPinkNoise">Pink-ish Noise</button>
+  <button id="btnTriangle">Triangle Wave (5Hz)</button>
+  <button id="btnSine10Hz">10 Hz Sine</button>
+  <button id="btnSine10Hz3Hz">10 Hz + 3 Hz</button>
+  <button id="btnMultiSine">5-Frequency Sine Mix</button>
+</div>
+
+<div class="container">
+  <div class="canvas-container">
+    <h3>Custom Drawing (0–1s, -1 to 1)</h3>
+    <div id="drawingContainer"></div>
+  </div>
+  <div class="canvas-container">
+    <h3>Fourier Reconstruction</h3>
+    <div id="reconContainer"></div>
+  </div>
+  <div class="canvas-container">
+    <h3>Power Spectrum (PSD)</h3>
+    <div id="psdContainer"></div>
+  </div>
+</div>
+
+<script>
+/*************************************************************
+ * GLOBALS & CONSTANTS
+ *************************************************************/
+const T = 1.0;          // 1 second duration
+const N = 1000;         // Use 1000 samples for high resolution
+let drawingDomain = [];   // Points: x in [0,1], y in [-1,1]
+let sampledSignal = [];   // Resampled signal (length N)
+let fourierData = [];     // DFT results
+let numComponents = 15;   // Initial slider value
+let needsDFT = false;     // Flag to trigger DFT recalculation
+
+// Define plot margins
+const marginLeft = 50, marginRight = 20, marginTop = 20, marginBottom = 60;
+// Additional padding inside the plot so signals aren’t drawn flush to the edges
+const plotPadding = 10;
+
+/*************************************************************
+ * HELPER FUNCTIONS
+ *************************************************************/
+
+// For drawing output, map domain (t, y) to pixel coordinates within the plot region.
+function domainToPixel(t, y, width, height) {
+  let plotX = marginLeft, plotY = marginTop;
+  let plotW = width - marginLeft - marginRight, plotH = height - marginTop - marginBottom;
+  let effX = plotX + plotPadding, effY = plotY + plotPadding;
+  let effW = plotW - 2 * plotPadding, effH = plotH - 2 * plotPadding;
+  let px = effX + (t / T) * effW;
+  let py = effY + mapRange(y, 1, -1, 0, effH);
+  return { x: px, y: py };
+}
+
+// Linear mapping function
+function mapRange(v, inMin, inMax, outMin, outMax) {
+  return outMin + ((v - inMin) * (outMax - outMin)) / (inMax - inMin);
+}
+
+// For mouse input, convert mouse coordinates (relative to canvas) to domain coordinates
+function mouseToDomain(mouseX, mouseY, width, height) {
+  let plotX = marginLeft, plotY = marginTop;
+  let plotW = width - marginLeft - marginRight, plotH = height - marginTop - marginBottom;
+  let effX = plotX + plotPadding, effY = plotY + plotPadding;
+  let effW = plotW - 2 * plotPadding, effH = plotH - 2 * plotPadding;
+  let localX = mouseX - effX;
+  let localY = mouseY - effY;
+  // Clamp values
+  localX = Math.max(0, Math.min(localX, effW));
+  localY = Math.max(0, Math.min(localY, effH));
+  let t = (localX / effW) * T;
+  let y = mapRange(localY, 0, effH, 1, -1);
+  return { x: t, y: y };
+}
+
+// Resample drawingDomain into N samples (if needed)
+function resampleDrawing(domainPoints, N) {
+  if (domainPoints.length < 2) return Array(N).fill(0);
+  domainPoints.sort((a, b) => a.x - b.x);
+  let result = [];
+  for (let i = 0; i < N; i++) {
+    let t = (i / (N - 1)) * T;
+    let yVal = interpolateY(domainPoints, t);
+    result.push(yVal);
+  }
+  return result;
+}
+
+// Linear interpolation to get y at time t
+function interpolateY(points, t) {
+  if (t <= points[0].x) return points[0].y;
+  if (t >= points[points.length - 1].x) return points[points.length - 1].y;
+  for (let i = 0; i < points.length - 1; i++) {
+    if (t >= points[i].x && t <= points[i + 1].x) {
+      let x1 = points[i].x, y1 = points[i].y;
+      let x2 = points[i + 1].x, y2 = points[i + 1].y;
+      let frac = (t - x1) / (x2 - x1);
+      return y1 + frac * (y2 - y1);
+    }
+  }
+  return points[points.length - 1].y;
+}
+
+function normalizeToMinusOnePlusOne(signal) {
+  let minS = Math.min(...signal);
+  let maxS = Math.max(...signal);
+  let range = maxS - minS;
+  if (range < 1e-12) return signal;
+  return signal.map(v => -1 + 2 * (v - minS) / range);
+}
+
+function meanCenterPoints(points) {
+  let sum = points.reduce((acc, pt) => acc + pt.y, 0);
+  let mean = sum / points.length;
+  return points.map(pt => ({ x: pt.x, y: pt.y - mean }));
+}
+
+function dft(signal) {
+  let X = [];
+  for (let k = 0; k < signal.length; k++) {
+    let re = 0, im = 0;
+    for (let n = 0; n < signal.length; n++) {
+      let phi = (2 * Math.PI * k * n) / signal.length;
+      re += signal[n] * Math.cos(phi);
+      im -= signal[n] * Math.sin(phi);
+    }
+    re /= signal.length;
+    im /= signal.length;
+    let amp = Math.sqrt(re * re + im * im);
+    let phase = Math.atan2(im, re);
+    let freqHz = k * (1 / T);
+    X.push({ re, im, freqBin: k, freqHz, amp, phase });
+  }
+  return X;
+}
+
+function singleComponent(re, im, freqHz, t) {
+  let angle = 2 * Math.PI * freqHz * t;
+  return re * Math.cos(angle) - im * Math.sin(angle);
+}
+
+function sumComponents(fourierData, numComps, t) {
+  let y = 0;
+  for (let i = 0; i < Math.min(numComps, fourierData.length); i++) {
+    let { re, im, freqHz } = fourierData[i];
+    y += singleComponent(re, im, freqHz, t);
+  }
+  return y;
+}
+
+/*************************************************************
+ * TEMPLATE WAVE GENERATORS (Direct Generation over 1s)
+ *************************************************************/
+function generateSquareWave(freq = 5, numPoints = 1000) {
+  let points = [];
+  for (let i = 0; i < numPoints; i++) {
+    let t = i / (numPoints - 1);
+    let val = Math.sin(2 * Math.PI * freq * t) >= 0 ? 1 : -1;
+    points.push({ x: t, y: val });
+  }
+  return meanCenterPoints(points);
+}
+
+function generateWhiteNoise(numPoints = 1000) {
+  let points = [];
+  for (let i = 0; i < numPoints; i++) {
+    let t = i / (numPoints - 1);
+    let val = Math.random() * 2 - 1;
+    points.push({ x: t, y: val });
+  }
+  return meanCenterPoints(points);
+}
+
+function generatePinkNoise(numPoints = 1000) {
+  let points = [];
+  let current = 0;
+  for (let i = 0; i < numPoints; i++) {
+    let t = i / (numPoints - 1);
+    current += (Math.random() * 2 - 1) * 0.1;
+    current = Math.max(-1, Math.min(1, current));
+    points.push({ x: t, y: current });
+  }
+  return meanCenterPoints(points);
+}
+
+function generateTriangleWave(freq = 5, numPoints = 1000) {
+  let points = [];
+  for (let i = 0; i < numPoints; i++) {
+    let t = i / (numPoints - 1);
+    let phase = freq * t;
+    let cyclePos = phase % 1;
+    let val = cyclePos < 0.5 
+              ? -1 + (cyclePos / 0.5) * 2 
+              : 1 - ((cyclePos - 0.5) / 0.5) * 2;
+    points.push({ x: t, y: val });
+  }
+  return meanCenterPoints(points);
+}
+
+function generateSine10Hz(numPoints = 1000) {
+  let points = [];
+  const freq = 10;
+  for (let i = 1; i < numPoints; i++) {
+    // Use i/numPoints so that t goes from 0 to 1 (excluding 1)
+    let t = i / numPoints;
+    let val = Math.sin(2 * Math.PI * freq * t);
+    points.push({ x: t, y: val });
+  }
+  return points;  // No mean-centering
+}
+function generateSine10Hz3Hz(numPoints = 1000) {
+  let points = [];
+  for (let i = 0; i < numPoints; i++) {
+    let t = i / (numPoints - 1);
+    let val = Math.sin(2 * Math.PI * 10 * t) + Math.sin(2 * Math.PI * 3 * t);
+    val *= 0.5;
+    points.push({ x: t, y: val });
+  }
+  return meanCenterPoints(points);
+}
+
+function generateMultiSine(numPoints = 1000) {
+  let freqs = [3, 5, 7, 11, 13];
+  let points = [];
+  for (let i = 0; i < numPoints; i++) {
+    let t = i / (numPoints - 1);
+    let val = 0;
+    for (let f of freqs) {
+      val += Math.sin(2 * Math.PI * f * t);
+    }
+    val /= freqs.length;
+    points.push({ x: t, y: val });
+  }
+  return meanCenterPoints(points);
+}
+
+/*************************************************************
+ * P5 SKETCH #1: CUSTOM DRAWING PANEL
+ *************************************************************/
+let drawingP5 = function(p) {
+  p.setup = function() {
+    let c = p.createCanvas(400, 400);
+    c.parent('drawingContainer');
+    p.background(255);
+  };
+  p.draw = function() {
+    p.background(255);
+    drawTimeAmpAxes(p, 0, T, -1, 1, "Time (s)", "Amplitude");
+    // Clip drawing to the plot region
+    p.drawingContext.save();
+    p.drawingContext.beginPath();
+    p.drawingContext.rect(marginLeft, marginTop, p.width - marginLeft - marginRight, p.height - marginTop - marginBottom);
+    p.drawingContext.clip();
+    p.stroke(0);
+    p.noFill();
+    p.beginShape();
+    for (let pt of drawingDomain) {
+      let pix = domainToPixel(pt.x, pt.y, p.width, p.height);
+      p.vertex(pix.x, pix.y);
+    }
+    p.endShape();
+    p.drawingContext.restore();
+  };
+  p.mouseDragged = function() {
+    // Use the adjusted mouseToDomain function
+    let domPt = mouseToDomain(p.mouseX, p.mouseY, p.width, p.height);
+    drawingDomain.push(domPt);
+  };
+  p.mouseReleased = function() {
+    needsDFT = true;
+  };
+  p.resetDrawing = function() {
+    drawingDomain = [];
+    needsDFT = true;
+  };
+};
+
+// Convert raw mouse coordinates to domain coordinates (for drawing panel)
+function mouseToDomain(mouseX, mouseY, width, height) {
+  let plotX = marginLeft, plotY = marginTop;
+  let plotW = width - marginLeft - marginRight, plotH = height - marginTop - marginBottom;
+  let effX = plotX + plotPadding, effY = plotY + plotPadding;
+  let effW = plotW - 2 * plotPadding, effH = plotH - 2 * plotPadding;
+  let localX = mouseX - effX;
+  let localY = mouseY - effY;
+  localX = Math.max(0, Math.min(localX, effW));
+  localY = Math.max(0, Math.min(localY, effH));
+  let t = (localX / effW) * T;
+  let y = mapRange(localY, 0, effH, 1, -1);
+  return { x: t, y: y };
+}
+
+/*************************************************************
+ * P5 SKETCH #2: FOURIER RECONSTRUCTION PANEL
+ *************************************************************/
+let reconP5 = function(p) {
+  p.setup = function() {
+    let c = p.createCanvas(400, 400);
+    c.parent('reconContainer');
+    p.background(255);
+  };
+  p.draw = function() {
+    p.background(255);
+    if (needsDFT) {
+      let rawSignal = resampleDrawing(drawingDomain, N);
+      sampledSignal = normalizeToMinusOnePlusOne(rawSignal);
+      fourierData = dft(sampledSignal);
+      fourierData.sort((a, b) => a.freqBin - b.freqBin);
+      needsDFT = false;
+    }
+    drawTimeAmpAxes(p, 0, T, -1, 1, "Time (s)", "Amplitude");
+  
+    // Clip to the plot area
+    p.drawingContext.save();
+    p.drawingContext.beginPath();
+    p.drawingContext.rect(marginLeft, marginTop, p.width - marginLeft - marginRight, p.height - marginTop - marginBottom);
+    p.drawingContext.clip();
+  
+    let steps = 200;
+    // Compute composite reconstruction values for scaling
+    let recVals = [];
+    for (let i = 0; i <= steps; i++) {
+      let t = (i / steps) * T;
+      recVals.push(sumComponents(fourierData, numComponents, t));
+    }
+    let recMin = Math.min(...recVals);
+    let recMax = Math.max(...recVals);
+  
+    // Draw individual sine components, scaled using the same factor
+    for (let cIdx = 0; cIdx < Math.min(numComponents, fourierData.length); cIdx++) {
+      let comp = fourierData[cIdx];
+      p.stroke(150, 150, 255, 150);
+      p.strokeWeight(1);
+      p.noFill();
+      p.beginShape();
+      for (let i = 0; i <= steps; i++) {
+        let t = (i / steps) * T;
+        let rawVal = singleComponent(comp.re, comp.im, comp.freqHz, t);
+        // Scale using composite scaling
+        let yVal = mapRange(rawVal, recMin, recMax, -1, 1);
+        let pix = domainToPixel(t, yVal, p.width, p.height);
+        p.vertex(pix.x, pix.y);
+      }
+      p.endShape();
+    }
+  
+    // Draw summed reconstruction (thicker line) scaled to [-1,1]
+    p.stroke(0, 0, 200);
+    p.strokeWeight(2);
+    p.noFill();
+    p.beginShape();
+    for (let i = 0; i <= steps; i++) {
+      let t = (i / steps) * T;
+      let yNorm = mapRange(recVals[i], recMin, recMax, -1, 1);
+      let pix = domainToPixel(t, yNorm, p.width, p.height);
+      p.vertex(pix.x, pix.y);
+    }
+    p.endShape();
+  
+    p.drawingContext.restore();
+  };
+};
+
+/*************************************************************
+ * P5 SKETCH #3: POWER SPECTRUM (PSD) PANEL
+ *************************************************************/
+let psdP5 = function(p) {
+  p.setup = function() {
+    let c = p.createCanvas(400, 400);
+    c.parent('psdContainer');
+    p.background(255);
+  };
+  p.draw = function() {
+    p.background(255);
+    let fMin = 0, fMax = 30;
+    let maxAmp = 0;
+    for (let d of fourierData) {
+      if (d.freqHz <= fMax && d.amp > maxAmp) {
+        maxAmp = d.amp;
+      }
+    }
+    drawFreqAmpAxes(p, fMin, fMax, 0, maxAmp, "Frequency (Hz)", "Amplitude");
+    let plotW = p.width - marginLeft - marginRight;
+    let plotH = p.height - marginTop - marginBottom;
+    p.push();
+    p.translate(marginLeft, marginTop);
+    let barWidth = 5;
+    for (let k = 0; k < fourierData.length; k++) {
+      let d = fourierData[k];
+      if (d.freqHz > fMax) break;
+      let xPos = mapRange(d.freqHz, fMin, fMax, 0, plotW);
+      let yPos = mapRange(d.amp, 0, maxAmp, plotH, 0);
+      if (k < numComponents) p.fill(100, 150, 255);
+      else p.fill(200);
+      p.noStroke();
+      p.rect(xPos - barWidth * 0.5, yPos, barWidth, plotH - yPos);
+    }
+    p.pop();
+  };
+};
+
+/*************************************************************
+ * AXES DRAWING FUNCTIONS
+ *************************************************************/
+function drawTimeAmpAxes(p, xMin, xMax, yMin, yMax, xLabel, yLabel) {
+  let w = p.width, h = p.height;
+  let plotW = w - marginLeft - marginRight;
+  let plotH = h - marginTop - marginBottom;
+  p.push();
+  p.stroke(0);
+  p.fill(0);
+  p.textSize(12);
+  let xAxisY = h - marginBottom; 
+  p.line(marginLeft, xAxisY, marginLeft + plotW, xAxisY);
+  p.line(marginLeft, marginTop, marginLeft, marginTop + plotH);
+  p.textAlign(p.CENTER, p.TOP);
+  p.text(xLabel, marginLeft + plotW / 2, xAxisY + 20);
+  p.textAlign(p.RIGHT, p.CENTER);
+  p.push();
+  p.translate(marginLeft - 30, marginTop + plotH / 2);
+  p.rotate(-p.HALF_PI);
+  p.text(yLabel, 0, 0);
+  p.pop();
+  let numXTicks = 5;
+  for (let i = 0; i <= numXTicks; i++) {
+    let frac = i / numXTicks;
+    let xVal = xMin + frac * (xMax - xMin);
+    let px = marginLeft + frac * plotW;
+    p.line(px, xAxisY - 3, px, xAxisY + 3);
+    p.noStroke();
+    p.textAlign(p.CENTER, p.TOP);
+    p.text(xVal.toFixed(2), px, xAxisY + 20);
+    p.stroke(0);
+  }
+  let numYTicks = 4;
+  for (let i = 0; i <= numYTicks; i++) {
+    let frac = i / numYTicks;
+    let yVal = yMin + frac * (yMax - yMin);
+    let py = marginTop + (1 - frac) * plotH;
+    p.line(marginLeft - 3, py, marginLeft + 3, py);
+    p.noStroke();
+    p.textAlign(p.RIGHT, p.CENTER);
+    p.text(yVal.toFixed(1), marginLeft - 5, py);
+    p.stroke(0);
+  }
+  p.pop();
+}
+
+function drawFreqAmpAxes(p, fMin, fMax, aMin, aMax, xLabel, yLabel) {
+  let w = p.width, h = p.height;
+  let plotW = w - marginLeft - marginRight;
+  let plotH = h - marginTop - marginBottom;
+  p.push();
+  p.stroke(0);
+  p.fill(0);
+  p.textSize(12);
+  let xAxisY = h - marginBottom;
+  p.line(marginLeft, xAxisY, marginLeft + plotW, xAxisY);
+  p.line(marginLeft, marginTop, marginLeft, marginTop + plotH);
+  p.textAlign(p.CENTER, p.TOP);
+  p.text(xLabel, marginLeft + plotW / 2, xAxisY + 20);
+  p.textAlign(p.RIGHT, p.CENTER);
+  p.push();
+  p.translate(marginLeft - 30, marginTop + plotH / 2);
+  p.rotate(-p.HALF_PI);
+  p.text(yLabel, 0, 0);
+  p.pop();
+  let numXTicks = 3;
+  for (let i = 0; i <= numXTicks; i++) {
+    let frac = i / numXTicks;
+    let freqVal = fMin + frac * (fMax - fMin);
+    let px = marginLeft + frac * plotW;
+    p.line(px, xAxisY - 3, px, xAxisY + 3);
+    p.noStroke();
+    p.textAlign(p.CENTER, p.TOP);
+    p.text(freqVal.toFixed(0), px, xAxisY + 20);
+    p.stroke(0);
+  }
+  let numYTicks = 4;
+  for (let i = 0; i <= numYTicks; i++) {
+    let frac = i / numYTicks;
+    let ampVal = aMin + frac * (aMax - aMin);
+    let py = marginTop + (1 - frac) * plotH;
+    p.line(marginLeft - 3, py, marginLeft + 3, py);
+    p.noStroke();
+    p.textAlign(p.RIGHT, p.CENTER);
+    p.text(ampVal.toFixed(2), marginLeft - 5, py);
+    p.stroke(0);
+  }
+  p.pop();
+}
+
+/*************************************************************
+ * INSTANTIATE THE P5 SKETCHES
+ *************************************************************/
+let drawingInstance = new p5(drawingP5);
+let reconInstance   = new p5(reconP5);
+let psdInstance     = new p5(psdP5);
+
+/*************************************************************
+ * DOM HOOKS & BUTTONS
+ *************************************************************/
+const slider = document.getElementById("componentSlider");
+const compCountLabel = document.getElementById("componentCount");
+slider.addEventListener("input", function() {
+  numComponents = parseInt(this.value);
+  compCountLabel.innerText = numComponents;
+});
+compCountLabel.innerText = numComponents;
+document.getElementById("resetBtn").addEventListener("click", function() {
+  drawingInstance.resetDrawing();
+  fourierData = [];
+  sampledSignal = [];
+});
+
+// BUTTON HOOKS TO LOAD TEMPLATE WAVES
+document.getElementById("btnSquare").addEventListener("click", () => {
+  drawingDomain = generateSquareWave(5, 1000);
+  needsDFT = true;
+});
+document.getElementById("btnWhiteNoise").addEventListener("click", () => {
+  drawingDomain = generateWhiteNoise(1000);
+  needsDFT = true;
+});
+document.getElementById("btnPinkNoise").addEventListener("click", () => {
+  drawingDomain = generatePinkNoise(1000);
+  needsDFT = true;
+});
+document.getElementById("btnTriangle").addEventListener("click", () => {
+  drawingDomain = generateTriangleWave(5, 1000);
+  needsDFT = true;
+});
+document.getElementById("btnSine10Hz").addEventListener("click", () => {
+  drawingDomain = generateSine10Hz(1000);
+  needsDFT = true;
+});
+document.getElementById("btnSine10Hz3Hz").addEventListener("click", () => {
+  drawingDomain = generateSine10Hz3Hz(1000);
+  needsDFT = true;
+});
+document.getElementById("btnMultiSine").addEventListener("click", () => {
+  drawingDomain = generateMultiSine(1000);
+  needsDFT = true;
+});
+</script>
+</body>
+</html>
