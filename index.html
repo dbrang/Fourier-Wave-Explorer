@@ -26,6 +26,9 @@
       margin-left: auto;
       margin-right: auto;
     }
+	.canvas-container h3 {
+	  text-align: center;
+	}
     .sine-control {
       margin: 5px 0;
     }
@@ -109,9 +112,9 @@
   </div>
   <button id="btnGenerateWave">Generate Composite Wave</button>
   <br>
-  <label for="componentSlider">Sine Components (for reconstruction):</label>
-  <input type="range" id="componentSlider" min="1" max="30" value="15">
-  <span id="componentCount">15</span>
+  <label for="componentSlider">Sine Components (1 Hz Each):</label>
+  <input type="range" id="componentSlider" min="1" max="50" value="50">
+  <span id="componentCount">50</span>
 </div>
 
 <div class="container">
@@ -136,7 +139,7 @@ const N = 1000;         // 1000 samples
 let drawingDomain = [];   // Composite wave points: {x, y} in [0,1] and [-1,1]
 let sampledSignal = [];   // Resampled signal (length N)
 let fourierData = [];     // DFT results
-let numComponents = 15;   // For reconstruction
+let numComponents = 50;   // For reconstruction
 let needsDFT = false;     // Flag to update DFT
 
 // Plot margins & padding
@@ -365,7 +368,7 @@ let psdP5 = function(p) {
   };
   p.draw = function() {
     p.background(255);
-    let fMin = 0, fMax = 30;
+    let fMin = 0, fMax = 50;
     let maxAmp = 0;
     for (let d of fourierData) {
       if (d.freqHz <= fMax && d.amp > maxAmp) {
@@ -407,10 +410,10 @@ function drawTimeAmpAxes(p, xMin, xMax, yMin, yMax, xLabel, yLabel) {
   p.line(marginLeft, xAxisY, marginLeft + plotW, xAxisY);
   p.line(marginLeft, marginTop, marginLeft, marginTop + plotH);
   p.textAlign(p.CENTER, p.TOP);
-  p.text(xLabel, marginLeft + plotW / 2, xAxisY + 20);
+  p.text(xLabel, marginLeft + plotW / 2, xAxisY + 40);
   p.textAlign(p.RIGHT, p.CENTER);
   p.push();
-  p.translate(marginLeft - 30, marginTop + plotH / 2);
+  p.translate(marginLeft - 40, marginTop + plotH / 2);
   p.rotate(-p.HALF_PI);
   p.text(yLabel, 0, 0);
   p.pop();
@@ -451,14 +454,14 @@ function drawFreqAmpAxes(p, fMin, fMax, aMin, aMax, xLabel, yLabel) {
   p.line(marginLeft, xAxisY, marginLeft + plotW, xAxisY);
   p.line(marginLeft, marginTop, marginLeft, marginTop + plotH);
   p.textAlign(p.CENTER, p.TOP);
-  p.text(xLabel, marginLeft + plotW / 2, xAxisY + 20);
+  p.text(xLabel, marginLeft + plotW / 2, xAxisY + 40);
   p.textAlign(p.RIGHT, p.CENTER);
   p.push();
-  p.translate(marginLeft - 30, marginTop + plotH / 2);
+  p.translate(marginLeft - 40, marginTop + plotH / 2);
   p.rotate(-p.HALF_PI);
   p.text(yLabel, 0, 0);
   p.pop();
-  let numXTicks = 3;
+  let numXTicks = 10;
   for (let i = 0; i <= numXTicks; i++) {
     let frac = i / numXTicks;
     let freqVal = fMin + frac * (fMax - fMin);
@@ -505,6 +508,10 @@ compCountLabel.innerText = numComponents;
 document.getElementById("btnGenerateWave").addEventListener("click", () => {
   drawingDomain = generateCompositeWave();
   needsDFT = true;
+});
+document.addEventListener('DOMContentLoaded', () => {
+    drawingDomain = generateCompositeWave();
+    needsDFT = true;
 });
 
 // (Optional) Template wave buttons remain available:
