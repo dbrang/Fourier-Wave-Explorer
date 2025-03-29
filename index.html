@@ -70,7 +70,7 @@
 <body>
 <header>
   <h1>Fourier Wave Explorer</h1>
-  <p>Set the frequency and amplitude for 5 sine waves, generate a composite 1‑second signal, and view its Fourier reconstruction (scaled to –1 to 1) and PSD.</p>
+  <p>Set the frequency and amplitude for 5 sine waves, generate a composite 1‑second signal, and view its Fourier reconstruction (scaled to –1 to 1) and PSD.</p>Drag the slider to hide higher frequency components.</p>
 </header>
 
 <div class="controls-container">
@@ -325,7 +325,7 @@ let reconP5 = function(p) {
     // Draw individual sine components, scaled using the same factor
     for (let cIdx = 0; cIdx < Math.min(numComponents, fourierData.length); cIdx++) {
       let comp = fourierData[cIdx];
-      p.stroke(150, 150, 255, 150);
+      p.stroke(158, 1, 166, 100);
       p.strokeWeight(1);
       p.noFill();
       p.beginShape();
@@ -386,7 +386,7 @@ let psdP5 = function(p) {
       if (d.freqHz > fMax) break;
       let xPos = mapRange(d.freqHz, fMin, fMax, 0, plotW);
       let yPos = mapRange(d.amp, 0, maxAmp, plotH, 0);
-      if (k < numComponents) p.fill(100, 150, 255);
+      if (k < numComponents) p.fill(0, 0, 200);
       else p.fill(200);
       p.noStroke();
       p.rect(xPos - barWidth * 0.5, yPos, barWidth, plotH - yPos);
